@@ -1,0 +1,58 @@
+name: Build Kartik Kamboj Music APK (from ZIP)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick newest source ZIP and extract
+        run: |
+          BEST=""; BT=0
+          for Z in Kartik-Kamboj-Music-source*.zip; do
+            [ -f "$Z" ] || continue
+            T=$(git log -1 --format=%ct -- "$Z")
+            echo "Found $Z (commit time ${T:-0})"
+            if [ "${T:-0}" -gt "$BT" ]; then BT=${T:-0}; BEST="$Z"; fi
+          done
+          if [ -z "$BEST" ]; then echo "ERROR: ZIP nahi mili"; exit 1; fi
+          echo "Using $BEST"
+          mkdir -p _kk_build
+          unzip -q "$BEST" -d _kk_build
+          GRADLEW=$(find _kk_build -maxdepth 3 -name gradlew | head -1)
+          if [ -z "$GRADLEW" ]; then echo "ERROR: gradlew nahi mila"; exit 1; fi
+          echo "PROJECT_DIR=$(dirname "$GRADLEW")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Install NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;28.2.13676358"
+
+      - name: Create debug keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -validity 10000
+
+      - name: Build universal debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleUniversalFossDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kartik-Kamboj-Music-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
